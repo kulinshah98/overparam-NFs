@@ -11,18 +11,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as D
-from torch.autograd import Variable 
+from torch.autograd import Variable
 from torch.utils.tensorboard import SummaryWriter
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--num_flows', type=int, default=1)
 parser.add_argument('--hidden_layers', type=int, default=1)
 parser.add_argument('--hidden_nodes', nargs="+", type=int, default=[100])
 parser.add_argument('--total_epochs', type=int, default=200)
 parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--dataset_file', type=str, default="../datasets/grid-dataset.txt") #
-parser.add_argument('--results_file', type=str, default="results/check")
+parser.add_argument('--results_file', type=str, default="results/")
 parser.add_argument('--activation', type=str, default="tanh")
 parser.add_argument('--model_structure', type=str, default="clamp-zero")
 parser.add_argument('--parameterization', choices=["normal"], type=str, default="normal")
@@ -101,38 +100,35 @@ if use_cuda:
     torch.set_default_tensor_type(dtype)
 
 args.d = d
-model = StackedFlow(args.num_flows, args.hidden_layers, args.hidden_nodes,  args.std_a, args.initialization, args)
+model = Flow(  args.hidden_layers, args.hidden_nodes, args.std_a, args.initialization, args)
 
 model.to(device)
 
 epoch = -1
 
 if args.plot_change_in_w_b:
-    initial_weight = [ [] for i in range(args.num_flows) ]
-    initial_bias = [ [] for i in range(args.num_flows) ]
-    
-    with torch.no_grad():
-        
-        size = [d] + args.hidden_nodes + [d]
-        for i in range( args.num_flows ):
-            for j in range( args.hidden_layers + 1 ):
-                initial_weight[i].append( model.flows_module[i].w_direction[j].data.clone() )
-        
-        for i in range( args.num_flows ):
-            for j in range( args.hidden_layers ):
-                initial_bias[i].append( model.flows_module[i].b[j].data.clone() )
+    initial_weight = [ ]
+    initial_bias = [ ]
 
-        for i in range( args.num_flows ):
-            for j in range( args.hidden_layers ):
-                writer.add_scalar("Change_in_w_" + str(i) + "_" + str(j), np.linalg.norm( (model.flows_module[i].w_direction[j].cpu().numpy() - initial_weight[i][j].cpu().numpy() ) ), epoch )
-                writer.add_scalar("Change_in_b_" + str(i) + "_" + str(j), np.linalg.norm( (model.flows_module[i].b[j].cpu().numpy() - initial_bias[i][j].cpu().numpy() ) ), epoch )
-            writer.add_scalar("Change_in_w_" + str(i) + "_" + str(args.hidden_layers), np.linalg.norm( (model.flows_module[i].w_direction[ args.hidden_layers].cpu().numpy() - initial_weight[i][args.hidden_layers].cpu().numpy() ) ), epoch )
+    with torch.no_grad():
+
+        size = [d] + args.hidden_nodes + [d]
+        for j in range( args.hidden_layers + 1 ):
+            initial_weight.append( model.w_direction[j].data.clone() )
+
+        for j in range( args.hidden_layers ):
+            initial_bias.append( model.b[j].data.clone() )
+
+        for j in range( args.hidden_layers ):
+            writer.add_scalar("Change_in_w_" + str(j), np.linalg.norm( (model.w_direction[j].cpu().numpy() - initial_weight[j].cpu().numpy() ) ), epoch )
+            writer.add_scalar("Change_in_b_" + str(j), np.linalg.norm( (model.b[j].cpu().numpy() - initial_bias[j].cpu().numpy() ) ), epoch )
+        writer.add_scalar("Change_in_w_" + str(args.hidden_layers), np.linalg.norm( (model.w_direction[ args.hidden_layers].cpu().numpy() - initial_weight[args.hidden_layers].cpu().numpy() ) ), epoch )
 
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
 base_dist = D.MultivariateNormal(torch.zeros(d).to(device),  torch.eye(d).to(device) )
-        
+
 if args.optimizer == "sgd":
     optimizer = torch.optim.SGD( model.parameters(), lr=args.learning_rate )
 
@@ -158,7 +154,7 @@ for epoch in range(args.total_epochs):
     epoch_jacob_loss = 0.0
     epoch_reg_loss = 0.0
     print("Epoch:", epoch)
-    
+
     model.train()
     for batch_idx, train_data in enumerate(train_loader):
         # print(batch_idx)
@@ -173,21 +169,17 @@ for epoch in range(args.total_epochs):
         epoch_jacob_loss += ( -jacob_loss.item() )
 
         loss = ( - prob_loss - jacob_loss ) * 1.0 / len_train_data
-        epoch_loss += ( -prob_loss.item() - jacob_loss.item()  ) 
-        # print(epoch, batch_idx, loss, prob_loss, jacob_loss)
-        # if batch_idx > 100: 
-        #     exit(0)
+        epoch_loss += ( -prob_loss.item() - jacob_loss.item()  )
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
-        
+
+
         if args.model_structure == "clamp-zero":
             with torch.no_grad():
-                for i, module_name in enumerate( model.flows_module ):
-                    for j in range( model.flows_module[i].num_hidden_layers + 1 ):
-                        model.flows_module[i].w_direction[j].data = model.flows_module[i].w_direction[j].data *(model.flows_module[i].lower_mask[j].data - model.flows_module[i].mask[j].data) + ((model.flows_module[i].w_direction[j].data.clamp( args.clamping_epsilon )) * model.flows_module[i].mask[j].data)
+                for j in range( model.num_hidden_layers + 1 ):
+                    model.w_direction[j].data = model.w_direction[j].data *(model.lower_mask[j].data - model.mask[j].data) + ((model.w_direction[j].data.clamp( args.clamping_epsilon )) * model.mask[j].data)
 
 
 
@@ -212,13 +204,11 @@ for epoch in range(args.total_epochs):
     writer.add_scalar("Test_probability_loss:", test_prob_loss, epoch )
     writer.add_scalar("Test_jacobian_loss:", test_jacob_loss, epoch)
 
-    for i in range( args.num_flows ):
-            for j in range( args.hidden_layers ):
-                writer.add_scalar("Change_in_w_" + str(i) + "_" + str(j), np.linalg.norm( (model.flows_module[i].w_direction[j].data.cpu().numpy() - initial_weight[i][j].cpu().numpy() ) ), epoch )
-                writer.add_scalar("Change_in_b_" + str(i) + "_" + str(j), np.linalg.norm( (model.flows_module[i].b[j].data.cpu().numpy() - initial_bias[i][j].cpu().numpy() ) ), epoch )
-            writer.add_scalar("Change_in_w_" + str(i) + "_" + str(args.hidden_layers), np.linalg.norm( (model.flows_module[i].w_direction[args.hidden_layers].data.cpu().numpy() - initial_weight[i][args.hidden_layers].cpu().numpy() ) ), epoch )
+    for j in range( args.hidden_layers ):
+        writer.add_scalar("Change_in_w_" + str(j), np.linalg.norm( (model.w_direction[j].data.cpu().numpy() - initial_weight[j].cpu().numpy() ) ), epoch )
+        writer.add_scalar("Change_in_b_" + str(j), np.linalg.norm( (model.b[j].data.cpu().numpy() - initial_bias[j].cpu().numpy() ) ), epoch )
+    writer.add_scalar("Change_in_w_" + str(args.hidden_layers), np.linalg.norm( (model.w_direction[args.hidden_layers].data.cpu().numpy() - initial_weight[args.hidden_layers].cpu().numpy() ) ), epoch )
 
 
 
 writer.close()
-

@@ -15,38 +15,20 @@ def read_dataset( args ):
 
     np.random.seed(args.seed)
     np.random.shuffle(data)
-    
+
     if len( data.shape ) == 1:
         d = 1
         data = data.reshape((-1, 1))
     else:
         d = len( data[0] )
-    
+
     train_data = data[int(0.1 * len(data)):, :]
     test_data = data[:int(0.1 * len(data)), :]
-        
+
     train_data = torch.from_numpy( train_data )
     test_data = torch.from_numpy( test_data )
 
     return train_data, test_data, d
-
-
-class StackedFlow(nn.Module):
-    def __init__(self, num_flows, num_hidden_layers, num_hidden_nodes, std_a, initialization, args):
-        super(StackedFlow, self).__init__()
-        self.num_flows = num_flows
-
-        self.flows_module = nn.ModuleList([])
-        for i in range(self.num_flows):
-            self.flows_module.append( Flow(  num_hidden_layers, num_hidden_nodes, std_a, initialization, args) )
-
-    def forward(self, inp):
-        log_det_jacob = 0
-        for i, module_name in enumerate( self.flows_module ):
-            inp, log_det_jacob_mod = self.flows_module[i]( inp )
-            log_det_jacob += log_det_jacob_mod
-        return inp, log_det_jacob
-
 
 
 class Flow(nn.Module):
@@ -59,18 +41,18 @@ class Flow(nn.Module):
         self.model_structure = args.model_structure
         self.parameterization = args.parameterization
 
-        
+
         self.w_direction = nn.ParameterList( [None] * ( num_hidden_layers + 1 ) )
         self.w_direction[0] = nn.Parameter( self.lower_dimensional_weight( num_hidden_nodes[0] * self.d , self.d, self.give_std( initialization, num_hidden_nodes[0] ) ) ) #1.0 / np.sqrt( num_hidden_nodes[0] )
         for i in range( num_hidden_layers - 1 ):
             self.w_direction[ i + 1 ] = nn.Parameter( self.lower_dimensional_weight( num_hidden_nodes[i+1] * self.d , num_hidden_nodes[i] * self.d, self.give_std( initialization, num_hidden_nodes[i+1] ) ) ) # 1.0 / np.sqrt( num_hidden_nodes[i+1] )
-        
+
 
         self.w_direction[ num_hidden_layers ] = nn.Parameter( self.lower_dimensional_weight( self.d, num_hidden_nodes[ self.num_hidden_layers - 1 ] * self.d, std_a ) )
         if args.train_last_layer == False:
             self.w_direction[num_hidden_layers].requires_grad = False
-        
-        
+
+
         self.mask = [None]*( num_hidden_layers + 1 )
         self.mask[0] = self.diagonal_mask( num_hidden_nodes[0] * self.d, self.d )
         for i in range( num_hidden_layers - 1 ):
@@ -114,11 +96,11 @@ class Flow(nn.Module):
 
         if self.model_structure == "clamp-zero":
             for i in range(self.d):
-                weight_mat[ (i * out) // self.d : ((i + 1) * out) // self.d,  
-                    (i * inp) // self.d : ((i + 1) * inp) // self.d ]  = torch.nn.init.normal_( 
+                weight_mat[ (i * out) // self.d : ((i + 1) * out) // self.d,
+                    (i * inp) // self.d : ((i + 1) * inp) // self.d ]  = torch.nn.init.normal_(
                         torch.Tensor( out // self.d, inp // self.d ), std=std ).abs().clamp(1e-10)
-                weight_mat[ (i * out) // self.d : ((i + 1) * out) // self.d,  
-                    0 : (i * inp) // self.d ]  = torch.nn.init.normal_( 
+                weight_mat[ (i * out) // self.d : ((i + 1) * out) // self.d,
+                    0 : (i * inp) // self.d ]  = torch.nn.init.normal_(
                         torch.Tensor( out // self.d, (i * inp) // self.d ), std=std )
 
         return weight_mat
@@ -128,7 +110,7 @@ class Flow(nn.Module):
         mask_mat = torch.zeros(out, inp)
 
         for i in range(self.d):
-            mask_mat[ (i * out) // self.d : ((i + 1) * out) // self.d, 
+            mask_mat[ (i * out) // self.d : ((i + 1) * out) // self.d,
             0 : ((i + 1) * inp) // self.d ] = 1
 
         return mask_mat
@@ -138,7 +120,7 @@ class Flow(nn.Module):
         mask_mat = torch.zeros(out, inp)
 
         for i in range(self.d):
-            mask_mat[ (i * out) // self.d : ((i + 1) * out) // self.d, 
+            mask_mat[ (i * out) // self.d : ((i + 1) * out) // self.d,
             (i * inp) // self.d : ((i + 1) * inp) // self.d ] = 1.0
 
         return mask_mat
@@ -185,7 +167,7 @@ class Flow(nn.Module):
                 grad = log_grad
             else:
                 grad = ( log_grad.unsqueeze(-2) + grad.transpose(-2, -1).unsqueeze(-3) ).logsumexp(-1)
-            
+
             # The shape of log_grad should be (inp.shape[0], d, output_dimension, d(dimension of data) )
             out = F.linear( out, weight_mat, self.b[i] )
             log_grad_activation = 2 * ( math.log(2) - out - F.softplus( -2 * out ) )
@@ -193,11 +175,10 @@ class Flow(nn.Module):
             # The shape of log_grad_activation should be (inp.shape[0], d*output_dimension)
             out = normalizing_const * self.activation( out )
             grad = grad + log_grad_activation.view(grad.shape) + torch.log( torch.Tensor([normalizing_const]) )
-        
+
         weight_mat, log_grad_T = self.get_weight_mat( self.num_hidden_layers )
         log_grad = log_grad_T.transpose(-2, -1).unsqueeze(0).repeat( inp.shape[0], 1, 1, 1 )
         grad = ( log_grad.unsqueeze(-2) + grad.transpose(-2, -1).unsqueeze(-3) ).logsumexp(-1)
         out = F.linear( out, weight_mat , torch.zeros(self.d) )
 
         return out, grad.squeeze().sum(-1)
-
