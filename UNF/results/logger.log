@@ -1,2 +1,0 @@
-2022-03-14 10:30:04,598 Namespace(base_distribution='exponential', batch_size=32, d=2, dataset_file='../datasets/grid-dataset.txt', hidden_layers=1, hidden_nodes=[6400], initialization='gaussian-sqrt(m)', int_steps=50, integrate_method='right-sum', learning_rate=0.005, lr_epochs=20, lr_mult_fact=1.0, plot_change_in_w_b=True, results_file='results/', seed=9, std_a=0.25, total_epochs=100, train_last_layer=False)
-2022-03-14 10:30:04,599 cpu
